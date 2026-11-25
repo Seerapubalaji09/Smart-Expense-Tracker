@@ -39,7 +39,7 @@ is a promise between agents. Do not deviate from it.
   totals, remaining budget, warning and breakdown all show **only the selected month**.
 - **Budget:** a single number stored once; it is compared against whichever month is selected.
   "Not set" is stored as `null`.
-- **Currency:** one constant `CURRENCY_SYMBOL = "$"` at the top of `app.js`. Change it there to switch currency.
+- **Currency:** one constant `CURRENCY_SYMBOL = "₹"` (Indian rupee) at the top of `app.js`. Change it there to switch currency.
 - **Dates:** an expense date may not be in the future. Default value of the date input is today.
 - **Money rounding:** all sums are rounded to 2 decimals (`Math.round(x * 100) / 100`).
 - **Sort order:** list shows newest date first; ties are broken by newest `createdAt` first.
@@ -217,7 +217,7 @@ Inputs should have `aria-describedby` pointing to their error span.
     <span class="expense-category">Food</span>
     <span class="expense-date">2026-11-25</span>
   </div>
-  <div class="expense-amount">$12.50</div>
+  <div class="expense-amount">₹12.50</div>
   <button type="button" class="delete-btn" data-id="exp_1700000000000_ab12"
           aria-label="Delete expense: Lunch">Delete</button>
 </li>
@@ -230,7 +230,7 @@ Inputs should have `aria-describedby` pointing to their error span.
 <div class="breakdown-row cat-food" data-category="Food">
   <span class="breakdown-label">Food</span>
   <div class="breakdown-bar"><div class="breakdown-bar-fill" style="width: 42.5%"></div></div>
-  <span class="breakdown-amount">$12.50</span>
+  <span class="breakdown-amount">₹12.50</span>
   <span class="breakdown-percent">42.5%</span>
 </div>
 ```
@@ -248,7 +248,7 @@ All of the following live in `app.js` and are exported on `window.ExpenseApp` (�
 
 ```js
 const CATEGORIES = ["Food", "Travel", "Shopping", "Education", "Others"];
-const CURRENCY_SYMBOL = "$";
+const CURRENCY_SYMBOL = "₹";
 const MAX_DESCRIPTION_LENGTH = 60;
 const MAX_AMOUNT = 1000000;        // per expense
 const MAX_BUDGET = 10000000;
@@ -350,7 +350,7 @@ calculateTotal(expenses)               -> number         // sum, rounded to 2 de
 calculateRemaining(budget, total)      -> number|null    // budget null → null; else round2(budget - total) (may be negative)
 isBudgetExceeded(budget, total)        -> boolean        // true only if budget is a number > 0 AND total > budget (equal is NOT exceeded)
 getCategoryBreakdown(expenses)         -> Breakdown[]    // §5.2 shape; unknown categories are ignored
-formatCurrency(amount)                 -> string         // CURRENCY_SYMBOL + 2 decimals + thousands separators: 1234.5 -> "$1,234.50"; negative -> "-$5.00"
+formatCurrency(amount)                 -> string         // CURRENCY_SYMBOL + 2 decimals + thousands separators: 1234.5 -> "₹1,234.50"; negative -> "-₹5.00"
 formatPercent(value)                   -> string         // 42.5 -> "42.5%"; 0 -> "0%"; 100 -> "100%"
 ```
 
@@ -395,7 +395,7 @@ handleMonthChange()            // update selectedMonth (fallback to current mont
 
 Behaviour details:
 - Budget input is pre-filled with the saved budget on load.
-- Warning text: `Warning: you have exceeded your monthly budget by $X.XX!` (X = `total - budget`, formatted by `formatCurrency` without the minus sign).
+- Warning text: `Warning: you have exceeded your monthly budget by ₹X.XX!` (X = `total - budget`, formatted by `formatCurrency` without the minus sign).
 - `#remaining-budget` shows `—` when no budget is set; `#budget-display` shows `Not set`.
 - Errors clear as soon as the user edits that field (`input` event) or on successful submit.
 - Delete is immediate (no confirm dialog) — keep it simple.
