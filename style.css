@@ -148,6 +148,7 @@ input:focus-visible, select:focus-visible, .btn:focus-visible, .delete-btn:focus
   background: var(--cat-bg, var(--c-others-bg)); color: var(--cat, var(--c-others));
   padding: 1px 10px; border-radius: 999px; font-weight: 700;
 }
+.expense-date { font-variant-numeric: tabular-nums; }
 .expense-amount { grid-area: amount; font-weight: 700; font-size: 1.1rem; font-variant-numeric: tabular-nums; }
 .delete-btn {
   grid-area: btn; font: inherit; font-size: .85rem; font-weight: 600; cursor: pointer;
