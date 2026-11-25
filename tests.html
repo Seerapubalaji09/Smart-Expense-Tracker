@@ -1,0 +1,674 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Smart Expense Tracker — Automated Tests</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 0; padding: 16px; background: #f5f5f5; color: #222; }
+  h1 { font-size: 1.3rem; margin: 0 0 8px; }
+  #summary { padding: 12px 16px; border-radius: 6px; font-weight: bold; margin-bottom: 12px; background: #ddd; }
+  #summary.pass { background: #c8f0cc; color: #0b5d1e; }
+  #summary.fail { background: #f8c9c9; color: #8a1111; }
+  #banner { display: none; padding: 14px 16px; border-radius: 6px; background: #b00020; color: #fff; font-weight: bold; margin-bottom: 12px; }
+  h2 { font-size: 1.05rem; margin: 18px 0 6px; border-bottom: 1px solid #bbb; padding-bottom: 2px; }
+  ul { list-style: none; margin: 0; padding: 0; }
+  li { padding: 4px 8px; margin: 2px 0; border-radius: 3px; font-size: 0.9rem; word-break: break-word; }
+  li.pass { background: #e6f7e8; color: #0b5d1e; }
+  li.fail { background: #fde4e4; color: #8a1111; }
+  li .msg { display: block; font-family: monospace; font-size: 0.8rem; margin-top: 2px; white-space: pre-wrap; }
+  .note { font-size: 0.8rem; color: #555; margin-bottom: 8px; }
+</style>
+</head>
+<body>
+<h1>Smart Expense Tracker — Automated Tests</h1>
+<p class="note">Tests the contract in PLAN.md §5 through <code>window.ExpenseApp</code> only.
+Uses storage key <code>smartExpenseTracker.TEST</code>; the real key <code>smartExpenseTracker.v1</code> is never touched.
+Test IDs (T-xx) match TEST_CASES.md Part A.</p>
+<div id="banner" role="alert">app.js not found or failed to load</div>
+<div id="summary">Running…</div>
+<div id="results"></div>
+
+<script src="app.js"></script>
+<script>
+(function () {
+  "use strict";
+
+  // ---------- tiny test runner ----------
+  var tests = [];          // { group, name, fn }
+  var currentGroup = "";
+  function group(name) { currentGroup = name; }
+  function test(name, fn) { tests.push({ group: currentGroup, name: name, fn: fn }); }
+
+  function show(v) {
+    try { return typeof v === "string" ? JSON.stringify(v) : JSON.stringify(v) === undefined ? String(v) : JSON.stringify(v); }
+    catch (e) { return String(v); }
+  }
+  function assertEqual(actual, expected, msg) {
+    if (actual !== expected && !(actual !== actual && expected !== expected)) {
+      throw new Error((msg ? msg + ": " : "") + "expected " + show(expected) + " but got " + show(actual));
+    }
+  }
+  function assertTrue(cond, msg) { if (!cond) { throw new Error(msg || "expected condition to be true"); } }
+  function assertDeepEqual(actual, expected, msg) {
+    var a = show(actual), e = show(expected);
+    if (a !== e) { throw new Error((msg ? msg + ": " : "") + "expected " + e + " but got " + a); }
+  }
+  function assertThrowsNot(fn, msg) {
+    try { fn(); } catch (err) { throw new Error((msg ? msg + ": " : "") + "threw " + err); }
+  }
+
+  var banner = document.getElementById("banner");
+  var summary = document.getElementById("summary");
+  var results = document.getElementById("results");
+
+  if (!window.ExpenseApp) {
+    banner.style.display = "block";
+    summary.textContent = "0 tests run — app.js not loaded";
+    summary.className = "fail";
+    return;
+  }
+
+  var App = window.ExpenseApp;
+  var TEST_KEY = "smartExpenseTracker.TEST";
+  var REAL_KEY = "smartExpenseTracker.v1";
+  var TODAY = "2026-11-25";
+  var valid = { description: "Lunch", amount: "12.50", category: "Food", date: "2026-11-20" };
+
+  function withInput(over) {
+    var o = {}, k;
+    for (k in valid) { o[k] = valid[k]; }
+    for (k in over) { o[k] = over[k]; }
+    return o;
+  }
+  function check(over) { return App.validateExpenseInput(withInput(over), TODAY); }
+  function exp(id, amount, category, date, createdAt) {
+    return { id: id, description: "d" + id, amount: amount, category: category, date: date, createdAt: createdAt || 1 };
+  }
+  function safeLS(fn) { try { return fn(); } catch (e) { return undefined; } }
+  function rawSet(v) { localStorage.setItem(TEST_KEY, v); }
+  function rawGet() { return localStorage.getItem(TEST_KEY); }
+
+  // ================= EXPENSE VALIDATION =================
+  group("Expense validation");
+  test("T-01 valid input passes with cleaned values", function () {
+    var r = check({});
+    assertEqual(r.valid, true);
+    assertDeepEqual(r.errors, {});
+    assertDeepEqual(r.values, { description: "Lunch", amount: 12.5, category: "Food", date: "2026-11-20" });
+  });
+  test("T-02 empty description rejected", function () {
+    var r = check({ description: "" });
+    assertEqual(r.valid, false);
+    assertEqual(r.errors.description, "Description is required.");
+  });
+  test("T-03 whitespace-only description rejected", function () {
+    assertEqual(check({ description: "     " }).errors.description, "Description is required.");
+  });
+  test("T-04 61-character description rejected", function () {
+    var r = check({ description: new Array(62).join("a") });
+    assertEqual(r.valid, false);
+    assertEqual(r.errors.description, "Description must be 60 characters or fewer.");
+  });
+  test("T-05 60-character description accepted", function () {
+    var r = check({ description: new Array(61).join("a") });
+    assertEqual(r.valid, true);
+    assertEqual(r.values.description.length, 60);
+  });
+  test("T-06 description is trimmed", function () {
+    assertEqual(check({ description: "  Lunch  " }).values.description, "Lunch");
+  });
+  test("T-07 description of 60 chars plus surrounding spaces accepted (trim before length)", function () {
+    assertEqual(check({ description: "  " + new Array(61).join("a") + "  " }).valid, true);
+  });
+  test("T-08 empty amount rejected", function () {
+    assertEqual(check({ amount: "" }).errors.amount, "Amount is required.");
+  });
+  test("T-09 non-numeric amount 'abc' rejected", function () {
+    assertEqual(check({ amount: "abc" }).errors.amount, "Amount must be a number.");
+  });
+  test("T-10 malformed amount '1e3x' rejected as not a number", function () {
+    assertEqual(check({ amount: "1e3x" }).errors.amount, "Amount must be a number.");
+  });
+  test("T-11 'NaN' and 'Infinity' amounts rejected as not a number", function () {
+    assertEqual(check({ amount: "NaN" }).errors.amount, "Amount must be a number.");
+    assertEqual(check({ amount: "Infinity" }).errors.amount, "Amount must be a number.");
+  });
+  test("T-12 zero amount rejected", function () {
+    assertEqual(check({ amount: "0" }).errors.amount, "Amount must be greater than 0.");
+  });
+  test("T-13 negative amount -5 rejected", function () {
+    assertEqual(check({ amount: "-5" }).errors.amount, "Amount must be greater than 0.");
+  });
+  test("T-14 negative decimal amount -0.01 rejected", function () {
+    assertEqual(check({ amount: "-0.01" }).errors.amount, "Amount must be greater than 0.");
+  });
+  test("T-15 amount 1000000.01 rejected (over max)", function () {
+    assertEqual(check({ amount: "1000000.01" }).errors.amount, "Amount cannot exceed 1,000,000.");
+  });
+  test("T-16 amount 1.234 rejected (3 decimals)", function () {
+    assertEqual(check({ amount: "1.234" }).errors.amount, "Amount can have at most 2 decimal places.");
+  });
+  test("T-17 amount 1000000 accepted (upper boundary)", function () {
+    var r = check({ amount: "1000000" });
+    assertEqual(r.valid, true);
+    assertEqual(r.values.amount, 1000000);
+  });
+  test("T-18 amount 0.01 accepted (lower boundary)", function () {
+    var r = check({ amount: "0.01" });
+    assertEqual(r.valid, true);
+    assertEqual(r.values.amount, 0.01);
+  });
+  test("T-19 amount returned as Number; '12.5' and '12.50' both give 12.5", function () {
+    var a = check({ amount: "12.5" }).values.amount, b = check({ amount: "12.50" }).values.amount;
+    assertEqual(typeof a, "number");
+    assertEqual(a, 12.5);
+    assertEqual(b, 12.5);
+  });
+  test("T-20 empty category rejected", function () {
+    assertEqual(check({ category: "" }).errors.category, "Please select a category.");
+  });
+  test("T-21 unknown category 'Games' rejected", function () {
+    assertEqual(check({ category: "Games" }).errors.category, "Please select a category.");
+  });
+  test("T-22 all five categories accepted", function () {
+    ["Food", "Travel", "Shopping", "Education", "Others"].forEach(function (c) {
+      assertEqual(check({ category: c }).valid, true, c);
+    });
+  });
+  test("T-23 empty date rejected", function () {
+    assertEqual(check({ date: "" }).errors.date, "Date is required.");
+  });
+  test("T-24 impossible date 2026-02-30 rejected", function () {
+    assertEqual(check({ date: "2026-02-30" }).errors.date, "Date is not valid.");
+  });
+  test("T-25 wrong format 25-11-2026 rejected", function () {
+    assertEqual(check({ date: "25-11-2026" }).errors.date, "Date is not valid.");
+  });
+  test("T-26 future date (tomorrow) rejected", function () {
+    assertEqual(check({ date: "2026-11-26" }).errors.date, "Date cannot be in the future.");
+  });
+  test("T-27 today's date accepted", function () {
+    assertEqual(check({ date: TODAY }).valid, true);
+  });
+  test("T-28 leap day 2024-02-29 accepted; 2026-02-29 rejected", function () {
+    assertEqual(check({ date: "2024-02-29" }).valid, true);
+    assertEqual(check({ date: "2026-02-29" }).errors.date, "Date is not valid.");
+  });
+  test("T-29 multiple errors reported at once, each on its own field", function () {
+    var r = App.validateExpenseInput({ description: "", amount: "-5", category: "", date: "" }, TODAY);
+    assertEqual(r.valid, false);
+    assertEqual(r.errors.description, "Description is required.");
+    assertEqual(r.errors.amount, "Amount must be greater than 0.");
+    assertEqual(r.errors.category, "Please select a category.");
+    assertEqual(r.errors.date, "Date is required.");
+  });
+  test("T-30 only the failing field appears in errors", function () {
+    var r = check({ amount: "abc" });
+    assertDeepEqual(Object.keys(r.errors), ["amount"]);
+  });
+  test("T-31 validateExpenseInput does not mutate its input", function () {
+    var input = withInput({ description: "  pad  " });
+    var copy = JSON.stringify(input);
+    App.validateExpenseInput(input, TODAY);
+    assertEqual(JSON.stringify(input), copy);
+  });
+  test("T-32 HTML in description is accepted as plain text (not stripped)", function () {
+    var s = "<img src=x onerror=alert(1)>";
+    var r = check({ description: s });
+    assertEqual(r.valid, true);
+    assertEqual(r.values.description, s);
+  });
+
+  // ================= BUDGET VALIDATION =================
+  group("Budget validation");
+  test("T-33 empty budget rejected", function () {
+    var r = App.validateBudget("");
+    assertEqual(r.valid, false);
+    assertEqual(r.error, "Budget is required.");
+    assertEqual(r.value, null);
+  });
+  test("T-34 whitespace-only budget rejected", function () {
+    assertEqual(App.validateBudget("  ").error, "Budget is required.");
+  });
+  test("T-35 non-numeric budget 'abc' rejected", function () {
+    assertEqual(App.validateBudget("abc").error, "Budget must be a number.");
+  });
+  test("T-36 zero budget rejected", function () {
+    assertEqual(App.validateBudget("0").error, "Budget must be greater than 0.");
+  });
+  test("T-37 negative budget -10 rejected", function () {
+    var r = App.validateBudget("-10");
+    assertEqual(r.valid, false);
+    assertEqual(r.error, "Budget must be greater than 0.");
+    assertEqual(r.value, null);
+  });
+  test("T-38 budget 10000000.01 rejected (over max)", function () {
+    assertEqual(App.validateBudget("10000000.01").error, "Budget cannot exceed 10,000,000.");
+  });
+  test("T-39 budget 10.123 rejected (3 decimals)", function () {
+    assertEqual(App.validateBudget("10.123").error, "Budget can have at most 2 decimal places.");
+  });
+  test("T-40 budget 500 accepted", function () {
+    var r = App.validateBudget("500");
+    assertEqual(r.valid, true);
+    assertEqual(r.error, "");
+    assertEqual(r.value, 500);
+  });
+  test("T-41 budget boundaries 0.01 and 10000000 accepted", function () {
+    assertEqual(App.validateBudget("0.01").value, 0.01);
+    assertEqual(App.validateBudget("10000000").value, 10000000);
+  });
+  test("T-42 budget with surrounding spaces ' 250 ' accepted as 250", function () {
+    assertEqual(App.validateBudget(" 250 ").value, 250);
+  });
+
+  // ================= CREATE / ADD / DELETE =================
+  group("Create / add / delete");
+  test("T-43 createExpense builds a full record with createdAt = now", function () {
+    var e = App.createExpense({ description: "Lunch", amount: 12.5, category: "Food", date: "2026-11-20" }, 1700000000000);
+    assertEqual(e.description, "Lunch");
+    assertEqual(e.amount, 12.5);
+    assertEqual(e.category, "Food");
+    assertEqual(e.date, "2026-11-20");
+    assertEqual(e.createdAt, 1700000000000);
+    assertTrue(/^exp_1700000000000_[a-z0-9]{4}$/.test(e.id), "id format: " + e.id);
+  });
+  test("T-44 createExpense ids are unique across 100 calls and match the format", function () {
+    var seen = {}, i, e;
+    for (i = 0; i < 100; i++) {
+      e = App.createExpense({ description: "x", amount: 1, category: "Food", date: "2026-11-20" });
+      assertTrue(/^exp_\d+_[a-z0-9]{4}$/.test(e.id), "bad id " + e.id);
+      assertTrue(!seen[e.id], "duplicate id " + e.id);
+      seen[e.id] = true;
+    }
+  });
+  test("T-45 addExpense returns a NEW array with the expense appended; original untouched", function () {
+    var orig = [exp("a", 1, "Food", "2026-11-01")], added = exp("b", 2, "Travel", "2026-11-02");
+    var out = App.addExpense(orig, added);
+    assertTrue(out !== orig, "must be a new array");
+    assertEqual(orig.length, 1);
+    assertEqual(out.length, 2);
+    assertEqual(out[1].id, "b");
+  });
+  test("T-46 deleteExpense removes only the matching id", function () {
+    var list = [exp("a", 1, "Food", "2026-11-01"), exp("b", 2, "Travel", "2026-11-02"), exp("c", 3, "Others", "2026-11-03")];
+    var out = App.deleteExpense(list, "b");
+    assertDeepEqual(out.map(function (e) { return e.id; }), ["a", "c"]);
+    assertEqual(list.length, 3, "original must not change");
+    assertTrue(out !== list);
+  });
+  test("T-47 deleteExpense with unknown id returns an equal copy", function () {
+    var list = [exp("a", 1, "Food", "2026-11-01")];
+    var out = App.deleteExpense(list, "zzz");
+    assertDeepEqual(out, list);
+    assertTrue(out !== list, "should be a copy");
+  });
+  test("T-48 deleteExpense on empty list returns []", function () {
+    assertDeepEqual(App.deleteExpense([], "a"), []);
+  });
+  test("T-49 add then delete round trip restores the original list", function () {
+    var base = [exp("a", 5, "Food", "2026-11-01")];
+    var e = App.createExpense({ description: "x", amount: 7, category: "Travel", date: "2026-11-02" });
+    var after = App.deleteExpense(App.addExpense(base, e), e.id);
+    assertDeepEqual(after, base);
+  });
+
+  // ================= MONTH FILTERING =================
+  group("Month filtering");
+  test("T-50 getMonthKey extracts YYYY-MM", function () {
+    assertEqual(App.getMonthKey("2026-11-25"), "2026-11");
+    assertEqual(App.getMonthKey("2026-01-01"), "2026-01");
+  });
+  test("T-51 getCurrentMonthKey uses the supplied Date (local)", function () {
+    assertEqual(App.getCurrentMonthKey(new Date(2026, 10, 25, 12, 0, 0)), "2026-11");
+    assertEqual(App.getCurrentMonthKey(new Date(2026, 0, 5)), "2026-01");
+  });
+  test("T-52 getTodayString uses the supplied Date (local) with zero padding", function () {
+    assertEqual(App.getTodayString(new Date(2026, 10, 25, 23, 59, 0)), "2026-11-25");
+    assertEqual(App.getTodayString(new Date(2026, 0, 5, 0, 0, 1)), "2026-01-05");
+  });
+  test("T-53 filterByMonth includes first and last day of the month", function () {
+    var list = [exp("a", 1, "Food", "2026-11-01"), exp("b", 1, "Food", "2026-11-30")];
+    assertEqual(App.filterByMonth(list, "2026-11").length, 2);
+  });
+  test("T-54 filterByMonth excludes 2026-10-31 and 2026-12-01", function () {
+    var list = [exp("a", 1, "Food", "2026-10-31"), exp("b", 1, "Food", "2026-12-01"), exp("c", 1, "Food", "2026-11-15")];
+    assertDeepEqual(App.filterByMonth(list, "2026-11").map(function (e) { return e.id; }), ["c"]);
+  });
+  test("T-55 filterByMonth separates the same month in different years", function () {
+    var list = [exp("a", 1, "Food", "2025-11-10"), exp("b", 1, "Food", "2026-11-10")];
+    assertDeepEqual(App.filterByMonth(list, "2026-11").map(function (e) { return e.id; }), ["b"]);
+  });
+  test("T-56 filterByMonth keeps original order and returns [] when nothing matches", function () {
+    var list = [exp("a", 1, "Food", "2026-11-20"), exp("b", 1, "Food", "2026-11-02")];
+    assertDeepEqual(App.filterByMonth(list, "2026-11").map(function (e) { return e.id; }), ["a", "b"]);
+    assertDeepEqual(App.filterByMonth(list, "2020-01"), []);
+  });
+  test("T-57 filterByMonth does not mutate the original array", function () {
+    var list = [exp("a", 1, "Food", "2026-10-01"), exp("b", 1, "Food", "2026-11-01")];
+    App.filterByMonth(list, "2026-11");
+    assertEqual(list.length, 2);
+  });
+
+  // ================= TOTALS / REMAINING / EXCEEDED =================
+  group("Totals, remaining budget, budget warning");
+  test("T-58 calculateTotal of [] is 0", function () {
+    assertEqual(App.calculateTotal([]), 0);
+  });
+  test("T-59 calculateTotal sums amounts", function () {
+    assertEqual(App.calculateTotal([exp("a", 10, "Food", "2026-11-01"), exp("b", 2.5, "Travel", "2026-11-02")]), 12.5);
+  });
+  test("T-60 calculateTotal rounds floating-point error (0.1 + 0.2 = 0.3)", function () {
+    assertEqual(App.calculateTotal([exp("a", 0.1, "Food", "2026-11-01"), exp("b", 0.2, "Food", "2026-11-01")]), 0.3);
+  });
+  test("T-61 calculateTotal after deleting an expense reflects the new sum", function () {
+    var list = [exp("a", 100, "Food", "2026-11-01"), exp("b", 50, "Food", "2026-11-01")];
+    assertEqual(App.calculateTotal(App.deleteExpense(list, "a")), 50);
+  });
+  test("T-62 calculateRemaining(null, 50) is null", function () {
+    assertEqual(App.calculateRemaining(null, 50), null);
+  });
+  test("T-63 calculateRemaining(500, 125.5) is 374.5", function () {
+    assertEqual(App.calculateRemaining(500, 125.5), 374.5);
+  });
+  test("T-64 calculateRemaining(100, 130) is -30 (negative allowed)", function () {
+    assertEqual(App.calculateRemaining(100, 130), -30);
+  });
+  test("T-65 calculateRemaining(100, 100) is 0", function () {
+    assertEqual(App.calculateRemaining(100, 100), 0);
+  });
+  test("T-66 calculateRemaining rounds to 2 decimals", function () {
+    assertEqual(App.calculateRemaining(0.3, 0.1), 0.2);
+  });
+  test("T-67 isBudgetExceeded: total equal to budget is NOT exceeded", function () {
+    assertEqual(App.isBudgetExceeded(100, 100), false);
+  });
+  test("T-68 isBudgetExceeded: total over budget is exceeded", function () {
+    assertEqual(App.isBudgetExceeded(100, 100.01), true);
+  });
+  test("T-69 isBudgetExceeded: total under budget is not exceeded", function () {
+    assertEqual(App.isBudgetExceeded(100, 99.99), false);
+  });
+  test("T-70 isBudgetExceeded: null budget never exceeded", function () {
+    assertEqual(App.isBudgetExceeded(null, 999999), false);
+  });
+  test("T-71 isBudgetExceeded: zero total with a budget is not exceeded", function () {
+    assertEqual(App.isBudgetExceeded(100, 0), false);
+  });
+  test("T-72 warning clears when an expense is deleted (exceeded -> not exceeded)", function () {
+    var list = [exp("a", 80, "Food", "2026-11-01"), exp("b", 40, "Food", "2026-11-02")];
+    assertEqual(App.isBudgetExceeded(100, App.calculateTotal(list)), true);
+    assertEqual(App.isBudgetExceeded(100, App.calculateTotal(App.deleteExpense(list, "b"))), false);
+  });
+  test("T-73 warning clears when the budget is raised", function () {
+    assertEqual(App.isBudgetExceeded(100, 120), true);
+    assertEqual(App.isBudgetExceeded(200, 120), false);
+  });
+  test("T-74 totals/exceeded are per selected month (other months ignored)", function () {
+    var list = [exp("a", 90, "Food", "2026-10-15"), exp("b", 30, "Food", "2026-11-15")];
+    var nov = App.calculateTotal(App.filterByMonth(list, "2026-11"));
+    var oct = App.calculateTotal(App.filterByMonth(list, "2026-10"));
+    assertEqual(nov, 30);
+    assertEqual(oct, 90);
+    assertEqual(App.isBudgetExceeded(50, nov), false);
+    assertEqual(App.isBudgetExceeded(50, oct), true);
+  });
+
+  // ================= CATEGORY BREAKDOWN =================
+  group("Category breakdown");
+  var ORDER = ["Food", "Travel", "Shopping", "Education", "Others"];
+  test("T-75 breakdown always has 5 entries in category order", function () {
+    var b = App.getCategoryBreakdown([exp("a", 10, "Others", "2026-11-01")]);
+    assertEqual(b.length, 5);
+    assertDeepEqual(b.map(function (x) { return x.category; }), ORDER);
+  });
+  test("T-76 empty list: all totals 0, all percents 0, no NaN", function () {
+    var b = App.getCategoryBreakdown([]);
+    assertEqual(b.length, 5);
+    b.forEach(function (x) {
+      assertEqual(x.total, 0, x.category + " total");
+      assertEqual(x.percent, 0, x.category + " percent");
+    });
+  });
+  test("T-77 category totals are summed per category", function () {
+    var b = App.getCategoryBreakdown([
+      exp("a", 10, "Food", "2026-11-01"), exp("b", 2.5, "Food", "2026-11-02"), exp("c", 7.5, "Travel", "2026-11-03")
+    ]);
+    assertEqual(b[0].total, 12.5);
+    assertEqual(b[1].total, 7.5);
+    assertEqual(b[2].total, 0);
+  });
+  test("T-78 percentages: 12.5 of 30 total -> Food 41.7, Travel 25 rounded to 1 decimal", function () {
+    var b = App.getCategoryBreakdown([
+      exp("a", 12.5, "Food", "2026-11-01"), exp("b", 7.5, "Travel", "2026-11-02"), exp("c", 10, "Shopping", "2026-11-03")
+    ]);
+    assertEqual(b[0].percent, 41.7);
+    assertEqual(b[1].percent, 25);
+    assertEqual(b[2].percent, 33.3);
+  });
+  test("T-79 a single category gets 100%", function () {
+    var b = App.getCategoryBreakdown([exp("a", 40, "Education", "2026-11-01")]);
+    assertEqual(b[3].percent, 100);
+  });
+  test("T-80 percents sum to ~100 (±0.5)", function () {
+    var b = App.getCategoryBreakdown([
+      exp("a", 1, "Food", "x"), exp("b", 1, "Travel", "x"), exp("c", 1, "Shopping", "x"), exp("d", 1, "Education", "x"), exp("e", 2, "Others", "x")
+    ]);
+    var sum = b.reduce(function (s, x) { return s + x.percent; }, 0);
+    assertTrue(Math.abs(sum - 100) <= 0.5, "sum was " + sum);
+  });
+  test("T-81 unknown categories are ignored (not counted in totals or percentages)", function () {
+    var b = App.getCategoryBreakdown([exp("a", 10, "Food", "x"), exp("b", 999, "Games", "x")]);
+    assertEqual(b.length, 5);
+    assertEqual(b[0].total, 10);
+    assertEqual(b[0].percent, 100);
+    assertEqual(b.reduce(function (s, x) { return s + x.total; }, 0), 10);
+  });
+  test("T-82 breakdown does not mutate the input", function () {
+    var list = [exp("a", 10, "Food", "x")], copy = JSON.stringify(list);
+    App.getCategoryBreakdown(list);
+    assertEqual(JSON.stringify(list), copy);
+  });
+  test("T-83 breakdown of a month-filtered list only counts that month", function () {
+    var list = [exp("a", 10, "Food", "2026-10-10"), exp("b", 20, "Travel", "2026-11-10")];
+    var b = App.getCategoryBreakdown(App.filterByMonth(list, "2026-11"));
+    assertEqual(b[0].total, 0);
+    assertEqual(b[1].total, 20);
+    assertEqual(b[1].percent, 100);
+  });
+
+  // ================= FORMATTING =================
+  group("Formatting");
+  test("T-84 formatCurrency(1234.5) -> symbol + 1,234.50", function () {
+    assertEqual(App.formatCurrency(1234.5), App.CURRENCY_SYMBOL + "1,234.50");
+  });
+  test("T-85 formatCurrency(0) -> symbol + 0.00", function () {
+    assertEqual(App.formatCurrency(0), App.CURRENCY_SYMBOL + "0.00");
+  });
+  test("T-86 formatCurrency(12.5) -> symbol + 12.50", function () {
+    assertEqual(App.formatCurrency(12.5), App.CURRENCY_SYMBOL + "12.50");
+  });
+  test("T-87 formatCurrency(1000000) -> symbol + 1,000,000.00", function () {
+    assertEqual(App.formatCurrency(1000000), App.CURRENCY_SYMBOL + "1,000,000.00");
+  });
+  test("T-88 formatCurrency(-5) -> -symbol + 5.00", function () {
+    assertEqual(App.formatCurrency(-5), "-" + App.CURRENCY_SYMBOL + "5.00");
+  });
+  test("T-89 CURRENCY_SYMBOL is the rupee sign", function () {
+    assertEqual(App.CURRENCY_SYMBOL, "₹");
+  });
+  test("T-90 formatPercent: 42.5 -> '42.5%', 0 -> '0%', 100 -> '100%'", function () {
+    assertEqual(App.formatPercent(42.5), "42.5%");
+    assertEqual(App.formatPercent(0), "0%");
+    assertEqual(App.formatPercent(100), "100%");
+  });
+  test("T-91 exported constants match the contract", function () {
+    assertDeepEqual(App.CATEGORIES, ["Food", "Travel", "Shopping", "Education", "Others"]);
+    assertEqual(App.MAX_DESCRIPTION_LENGTH, 60);
+    assertEqual(App.MAX_AMOUNT, 1000000);
+    assertEqual(App.MAX_BUDGET, 10000000);
+  });
+
+  // ================= SORTING =================
+  group("Sorting");
+  test("T-92 sortExpenses orders by date descending", function () {
+    var out = App.sortExpenses([exp("a", 1, "Food", "2026-11-01"), exp("b", 1, "Food", "2026-11-20"), exp("c", 1, "Food", "2026-11-10")]);
+    assertDeepEqual(out.map(function (e) { return e.id; }), ["b", "c", "a"]);
+  });
+  test("T-93 sortExpenses breaks date ties by createdAt descending", function () {
+    var out = App.sortExpenses([exp("old", 1, "Food", "2026-11-05", 100), exp("new", 1, "Food", "2026-11-05", 300), exp("mid", 1, "Food", "2026-11-05", 200)]);
+    assertDeepEqual(out.map(function (e) { return e.id; }), ["new", "mid", "old"]);
+  });
+  test("T-94 sortExpenses returns a new array and leaves the original order unchanged", function () {
+    var list = [exp("a", 1, "Food", "2026-11-01"), exp("b", 1, "Food", "2026-11-20")];
+    var out = App.sortExpenses(list);
+    assertTrue(out !== list);
+    assertDeepEqual(list.map(function (e) { return e.id; }), ["a", "b"]);
+  });
+  test("T-95 sortExpenses on [] returns []", function () {
+    assertDeepEqual(App.sortExpenses([]), []);
+  });
+
+  // ================= STORAGE =================
+  group("Storage (localStorage persistence)");
+  test("T-96 storage key can be switched and read back", function () {
+    assertEqual(App.getStorageKey(), TEST_KEY);
+  });
+  test("T-97 missing key -> default empty data", function () {
+    assertDeepEqual(App.loadData(), { version: 1, budget: null, expenses: [] });
+  });
+  test("T-98 saveData returns true and writes JSON under the test key", function () {
+    var ok = App.saveData({ version: 1, budget: 500, expenses: [] });
+    assertEqual(ok, true);
+    assertTrue(rawGet() !== null, "nothing stored under test key");
+    assertEqual(JSON.parse(rawGet()).budget, 500);
+  });
+  test("T-99 save -> load round trip preserves budget and expenses exactly", function () {
+    var data = { version: 1, budget: 750.5, expenses: [exp("a", 12.5, "Food", "2026-11-20", 111), exp("b", 99.99, "Travel", "2026-10-02", 222)] };
+    App.saveData(data);
+    assertDeepEqual(App.loadData(), data);
+  });
+  test("T-100 persisted data reproduces the same totals/remaining after 'reload'", function () {
+    var data = { version: 1, budget: 100, expenses: [exp("a", 30.1, "Food", "2026-11-02"), exp("b", 20.2, "Others", "2026-11-03")] };
+    var totalBefore = App.calculateTotal(App.filterByMonth(data.expenses, "2026-11"));
+    App.saveData(data);
+    var back = App.loadData();
+    var totalAfter = App.calculateTotal(App.filterByMonth(back.expenses, "2026-11"));
+    assertEqual(totalAfter, totalBefore);
+    assertEqual(App.calculateRemaining(back.budget, totalAfter), 49.7);
+  });
+  test("T-101 null budget persists as null", function () {
+    App.saveData({ version: 1, budget: null, expenses: [] });
+    assertEqual(App.loadData().budget, null);
+  });
+  test("T-102 corrupt JSON '{oops' -> defaults, does not throw", function () {
+    rawSet("{oops");
+    var d;
+    assertThrowsNot(function () { d = App.loadData(); });
+    assertDeepEqual(d, { version: 1, budget: null, expenses: [] });
+  });
+  test("T-103 wrong-shape JSON ('[]', 'null', '123', '\"str\"') -> defaults", function () {
+    ["[]", "null", "123", "\"str\""].forEach(function (raw) {
+      rawSet(raw);
+      assertDeepEqual(App.loadData(), { version: 1, budget: null, expenses: [] }, "raw=" + raw);
+    });
+  });
+  test("T-104 bad expense records are dropped, good ones survive", function () {
+    var good = exp("good", 5, "Food", "2026-11-01");
+    rawSet(JSON.stringify({ version: 1, budget: 100, expenses: [
+      good,
+      { id: 1, description: "x", amount: 5, category: "Food", date: "2026-11-01" },          // id not string
+      { id: "a", description: 5, amount: 5, category: "Food", date: "2026-11-01" },          // description not string
+      { id: "b", description: "x", amount: -5, category: "Food", date: "2026-11-01" },       // negative amount
+      { id: "c", description: "x", amount: 0, category: "Food", date: "2026-11-01" },        // zero amount
+      { id: "d", description: "x", amount: "5", category: "Food", date: "2026-11-01" },      // amount string
+      { id: "e", description: "x", amount: 5, category: "Games", date: "2026-11-01" },       // unknown category
+      { id: "f", description: "x", amount: 5, category: "Food" },                            // no date
+      null, 42, "text"
+    ] }));
+    var d = App.loadData();
+    assertEqual(d.expenses.length, 1);
+    assertEqual(d.expenses[0].id, "good");
+    assertEqual(d.budget, 100);
+  });
+  test("T-105 invalid budget values (-5, 'x', 0) load as null", function () {
+    [-5, "x", 0, {}].forEach(function (b) {
+      rawSet(JSON.stringify({ version: 1, budget: b, expenses: [] }));
+      assertEqual(App.loadData().budget, null, "budget=" + show(b));
+    });
+  });
+  test("T-106 expenses not an array -> empty expenses, no throw", function () {
+    rawSet(JSON.stringify({ version: 1, budget: 50, expenses: "nope" }));
+    var d;
+    assertThrowsNot(function () { d = App.loadData(); });
+    assertDeepEqual(d.expenses, []);
+  });
+  test("T-107 clearData removes the stored value; load returns defaults", function () {
+    App.saveData({ version: 1, budget: 10, expenses: [] });
+    App.clearData();
+    assertEqual(rawGet(), null);
+    assertDeepEqual(App.loadData(), { version: 1, budget: null, expenses: [] });
+  });
+  test("T-108 clearData and loadData never throw on an empty store", function () {
+    assertThrowsNot(function () { App.clearData(); App.loadData(); });
+  });
+  test("T-109 delete persists: saving the shortened list removes the item after reload", function () {
+    var list = [exp("a", 1, "Food", "2026-11-01"), exp("b", 2, "Food", "2026-11-02")];
+    App.saveData({ version: 1, budget: null, expenses: list });
+    var loaded = App.loadData();
+    App.saveData({ version: 1, budget: null, expenses: App.deleteExpense(loaded.expenses, "a") });
+    assertDeepEqual(App.loadData().expenses.map(function (e) { return e.id; }), ["b"]);
+  });
+  test("T-110 storage is isolated: test key used, real key never written by these tests", function () {
+    App.saveData({ version: 1, budget: 1, expenses: [] });
+    assertEqual(App.getStorageKey(), TEST_KEY);
+    assertEqual(localStorage.getItem(REAL_KEY), realKeyBefore, "real key changed");
+  });
+
+  // ---------- run ----------
+  var realKeyBefore = safeLS(function () { return localStorage.getItem(REAL_KEY); });
+  var originalKey = App.getStorageKey();
+  App.setStorageKey(TEST_KEY);
+
+  var pass = 0, fail = 0, lastGroup = null, list = null;
+  tests.forEach(function (t) {
+    if (t.group !== lastGroup) {
+      lastGroup = t.group;
+      var h = document.createElement("h2");
+      h.textContent = t.group;
+      results.appendChild(h);
+      list = document.createElement("ul");
+      results.appendChild(list);
+    }
+    var li = document.createElement("li");
+    try {
+      safeLS(function () { localStorage.removeItem(TEST_KEY); });   // clean slate for every test
+      t.fn();
+      li.className = "pass";
+      li.textContent = "✔ " + t.name;
+      pass++;
+    } catch (err) {
+      li.className = "fail";
+      li.textContent = "✘ " + t.name;
+      var m = document.createElement("span");
+      m.className = "msg";
+      m.textContent = String(err && err.message ? err.message : err);
+      li.appendChild(m);
+      fail++;
+    }
+    list.appendChild(li);
+  });
+
+  // leave nothing behind and restore the original key
+  safeLS(function () { localStorage.removeItem(TEST_KEY); });
+  App.setStorageKey(originalKey);
+
+  summary.textContent = (fail === 0 ? "ALL PASSED: " : "FAILURES: ") + pass + " passed, " + fail + " failed, " + tests.length + " total";
+  summary.className = fail === 0 ? "pass" : "fail";
+  document.title = (fail === 0 ? "PASS" : "FAIL") + " — Smart Expense Tracker Tests";
+  window.__testResults = { passed: pass, failed: fail, total: tests.length };
+})();
+</script>
+</body>
+</html>
